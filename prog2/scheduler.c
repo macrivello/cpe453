@@ -28,10 +28,12 @@ struct typedef proc_list_node{
 	/*
 		other stuff?
 	*/
+  proc_list_node *prev;
 	proc_list_node *next;
 }proc_list_node;
 
 proc_list_node *curr;
+static int count = 0;
 
 void printUsageAndExit() 
 //takes void* head pointer, argv, and delimiter to build 
@@ -49,10 +51,11 @@ int scheduler(proc_list_node*, int);
 //takes head pointer of list and pid of node to be removed.
 //returns 0 if OK, >0 on error
 int remove_node(proc_list_node*, int);
-
+//print the linked list
+void print_list(void*);
 
 int main(int argc, char *argv[]) {
-  proc_list_node *head;
+  proc_list_node *head = NULL;
   int progCount, argCount, parsingArgs = 0;
   if (!(quantum = atol(argv[1]))) {
     printUsageAndExit();
@@ -65,6 +68,7 @@ int main(int argc, char *argv[]) {
       parsingArgs = 1;
 
       proc_list_node *node = calloc(1, sizeof(proc_list_node));
+      count++;
       argCount = 0;
       progCount++;
 
@@ -76,8 +80,9 @@ int main(int argc, char *argv[]) {
       node->args = argv;
 
       if (head == NULL) {
-        node->next = head = curr = node;
+        node->next = node->prev = head = curr = node;
       } else {
+        node->prev = curr;
         curr = curr->next = node;
         curr->next = head;
       }
@@ -111,10 +116,19 @@ void printUsageAndExit() {
   exit(1);
 }
 
+void forkFest()  {
+  int pid;
 
-
-void forkFest() {
-
+  while (curr->pid == 0) {
+    if (pid = fork()) {
+      //Parent
+      curr->pid = pid;
+    } else {
+      //Child
+      //Create FILE pointer for exec
+      pause();
+    }
+  }
 }
 
 int scheduler(proc_list_node* head, int quantum){
@@ -122,5 +136,43 @@ int scheduler(proc_list_node* head, int quantum){
 }
 
 int remove_node(proc_list_node *head, int pid){
-	
+	proc_list_node* head = curr;
+  proc_list_node* temp = head;
+
+  if(count > 1){
+    while(head && head->pid != pid){
+      temp = head;
+      head = head->next;  
+    } 
+    if(head->pid == pid){
+      temp = head;
+      head->prev->next = head->next;
+      free(temp);
+    }    
+  }else if(count == 1){
+    free(curr);
+    curr = NULL;
+  }else{
+    //no node to free, empty list
+    return 1; 
+  }
+  count--; 
+  return 0;
+   
+}
+
+void print_list(void* node){
+  proc_list_node* start;
+  proc_list_node* head = (proc_list_node*) node;
+  start = head;
+  int i = 0;
+
+  if(head){
+    do{
+      printf("%d pid: %d\nname: %s\nargs: %s\n\n", i, head->pid,head->name,head->args);
+      i++;
+      head = head->next;
+    } while(head && head != start);
+  }
+
 }
