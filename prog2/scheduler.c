@@ -14,49 +14,43 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <assert.h>
+#include <signal.h>
 
 #define MAX_ARGS 10
 #define MAX_PROGS 10
-
-const int quantum;
+#define MICRO_SECONDS_PER_SECOND 1000000
 
 //struct to build linked list of processes
-struct typedef proc_list_node{
-	int pid;
-	char* name;   //not sure if necessary
-	char* args[];
+typedef struct proc_list_node{
+	pid_t pid;
+	char* name;   
+  char** args;
 	/*
 		other stuff?
 	*/
-  proc_list_node *prev;
-	proc_list_node *next;
-}proc_list_node;
+  struct proc_list_node *prev;
+  struct proc_list_node *next;
+} node;
 
-proc_list_node *curr;
-static int count = 0;
+int quantum;
 
-void printUsageAndExit() 
-//takes void* head pointer, argv, and delimiter to build 
-//linked list of processes. This function does the parsing,
-// forking (including sending stop signal)
-//returns head of linked list
-void* build_proc_list(void*, char**, char);
-//the round robing scheduling
-//takes head pointer to proc_list and quantum value
-//runs until all processes in linked list are terminated
-//returns 0 if all good, >0 on error
-int scheduler(proc_list_node*, int);
-//called once a processes is finished to remove node from 
-//linked list
-//takes head pointer of list and pid of node to be removed.
-//returns 0 if OK, >0 on error
-int remove_node(proc_list_node*, int);
+node *head;
+node *currentRunning;
+
+void printUsageAndExit();
+
+void forkFest();
+
+int scheduler();
+
+void remove_node(int);
 //print the linked list
-void print_list(void*);
+void print_list();
 
 int main(int argc, char *argv[]) {
-  proc_list_node *head = NULL;
+  node *curr;
   int progCount, argCount, parsingArgs = 0;
+  
   if (!(quantum = atol(argv[1]))) {
     printUsageAndExit();
   }
@@ -67,8 +61,7 @@ int main(int argc, char *argv[]) {
     if (!parsingArgs) {
       parsingArgs = 1;
 
-      proc_list_node *node = calloc(1, sizeof(proc_list_node));
-      count++;
+      curr = calloc(1, sizeof(node));
       argCount = 0;
       progCount++;
 
@@ -76,18 +69,18 @@ int main(int argc, char *argv[]) {
         printUsageAndExit();
       }
 
-      node->name = argv++;
-      node->args = argv;
+      curr->name = *argv++;
+      curr->args = argv;
 
       if (head == NULL) {
-        node->next = node->prev = head = curr = node;
+        head = curr->next = curr->prev = curr;
       } else {
-        node->prev = curr;
-        curr = curr->next = node;
+        node *tailNode = head->prev;
         curr->next = head;
+        head->prev = tailNode->next = curr;
       }
     } else {
-      if (*argv == ':') {
+      if (**argv == ':') {
         *argv = NULL;
         parsingArgs = 0;
       } else {
@@ -101,22 +94,23 @@ int main(int argc, char *argv[]) {
       argv++;
     }
   }
-
-  curr = curr->next;
+  
+  printf("\n");
+  print_list();
+  printf("\n");
 
   return 0;
 }
 
 void printUsageAndExit() {
-  fprintf(stderr, "usage: schedule quantum [prog 1 [args] [: 
-      prog 2 [args] [: prog3 [args] [: … ]]]]\n
-      \tquantum must be an integer greater than 0.\n
-      Maximum programs: %d. Maximum arguments per program: % d.\n",
-      MAX_PROGS, MAX_ARGS);
+  fprintf(stderr, "usage: schedule quantum [prog 1 [args] [: prog 2 [args] [: prog3 [args] [: … ]]]]\n");
+  fprintf(stderr, "\tquantum must be an integer greater than 0.\n");
+  fprintf(stderr, "Maximum programs: %d. Maximum arguments per program: % d.\n",MAX_PROGS, MAX_ARGS);
   exit(1);
 }
 
 void forkFest()  {
+  node *curr = head;
   int pid;
 
   while (curr->pid == 0) {
@@ -125,54 +119,76 @@ void forkFest()  {
       curr->pid = pid;
     } else {
       //Child
-      //Create FILE pointer for exec
       pause();
+
+      //Bootstrap child process
+      execvp(curr->name, curr->args);
     }
+
+    curr = curr->next;
   }
 }
 
-int scheduler(proc_list_node* head, int quantum){
+int scheduler () {
+  node *curr = currentRunning;
 
+  while (curr) {
+    struct itimerval timerset;
+    struct timeval waitTime;
+
+    waitTime.tv_usec = quantum * 1000;
+
+    if (waitTime.tv_usec > MICRO_SECONDS_PER_SECOND) {
+      waitTime.tv_sec = (tv_sec) waitTime.tv_usec / MICRO_SECONDS_PER_SECOND;
+      waitTime.tv_usec = (tv_usec) waitTime.tv_usec % MICRO_SECONDS_PER_SECOND;
+    }
+
+    currentRunning = curr;
+    setitimer(ITIMER_REAL, timerset);
+    kill(curr->pid, SIGCONT);
+    waitpid(curr->pid, NULL, NULL);
+    curr = curr->next;
+  }
 }
 
-int remove_node(proc_list_node *head, int pid){
-	proc_list_node* head = curr;
-  proc_list_node* temp = head;
+void catch_alarm (int sig) {
+  if (sig == SIGALRM) {
+    kill(currentRunning->pid, SIGSTOP);
+  }
+}
 
-  if(count > 1){
-    while(head && head->pid != pid){
-      temp = head;
-      head = head->next;  
-    } 
-    if(head->pid == pid){
-      temp = head;
-      head->prev->next = head->next;
-      free(temp);
-    }    
-  }else if(count == 1){
-    free(curr);
-    curr = NULL;
+void remove_node(int pid){
+  node *temp = head;
+
+  if(head->next == head) { //only 1 in the list
+    free(head);
+    head = NULL;
   }else{
-    //no node to free, empty list
-    return 1; 
+    while(temp->pid != pid)
+      temp = temp->next;
+    if(temp == head){
+      head = temp->next;
+    }     
+     temp->prev->next = temp->next;
+     temp->next->prev = temp->prev;
+     free(temp);   
   }
-  count--; 
-  return 0;
-   
 }
 
-void print_list(void* node){
-  proc_list_node* start;
-  proc_list_node* head = (proc_list_node*) node;
-  start = head;
-  int i = 0;
+void print_list(){
+  node* curr = head;
+  curr = head;
+  int j = 0;
 
   if(head){
     do{
-      printf("%d pid: %d\nname: %s\nargs: %s\n\n", i, head->pid,head->name,head->args);
-      i++;
-      head = head->next;
-    } while(head && head != start);
+      printf("pid: %d\n name: %s\n args: ",curr->pid,curr->name);
+      for(j = 0; curr->args[j]; j++){
+        printf("%s ", curr->args[j]);
+      }
+      printf("\n");
+      curr = curr->next;
+    } while(head != curr);
   }
 
 }
