@@ -25,9 +25,6 @@ typedef struct proc_list_node{
 	pid_t pid;
 	char* name;   
   char** args;
-	/*
-		other stuff?
-	*/
   struct proc_list_node *prev;
   struct proc_list_node *next;
 } node;
@@ -38,14 +35,16 @@ node *head;
 node *currentRunning;
 
 void printUsageAndExit();
-
 void forkFest();
-
 int scheduler();
-
-void remove_node(int);
-//print the linked list
+void remove_node(pid_t);
 void print_list();
+
+void timer_handler (int signum) 
+{
+  printf("stopping pid %d\n",currentRunning->pid);
+  kill(currentRunning->pid, SIGSTOP);
+} 
 
 int main(int argc, char *argv[]) {
   node *curr;
@@ -73,7 +72,7 @@ int main(int argc, char *argv[]) {
       curr->args = argv;
 
       if (head == NULL) {
-        head = curr->next = curr->prev = curr;
+        currentRunning = head = curr->next = curr->prev = curr;
       } else {
         node *tailNode = head->prev;
         curr->next = head;
@@ -94,10 +93,12 @@ int main(int argc, char *argv[]) {
       argv++;
     }
   }
-  
-  printf("\n");
+
   print_list();
   printf("\n");
+  forkFest();
+  
+  scheduler();
 
   return 0;
 }
@@ -111,8 +112,7 @@ void printUsageAndExit() {
 
 void forkFest()  {
   node *curr = head;
-  int pid;
-
+  pid_t pid;
   while (curr->pid == 0) {
     if (pid = fork()) {
       //Parent
@@ -127,37 +127,52 @@ void forkFest()  {
 
     curr = curr->next;
   }
+  print_list();
 }
 
-int scheduler () {
+int scheduler() {
   node *curr = currentRunning;
+  struct sigaction sa;  
+  struct itimerval timerset;
+  int status, remove; //in case we need reference
+  pid_t r_pid;
+
+  memset (&sa, 0, sizeof (sa)); 
+  sa.sa_handler = &timer_handler; 
+  sigaction (SIGALRM, &sa, NULL); 
+
+  timerset.it_interval.tv_sec = timerset.it_value.tv_sec = 0;;
+  timerset.it_interval.tv_usec = timerset.it_value.tv_usec = quantum * 1000;
+  setitimer(ITIMER_REAL, &timerset, NULL);
 
   while (curr) {
-    struct itimerval timerset;
-    struct timeval waitTime;
+    //struct itimerval timerset;
+    //struct timeval waitTime;
 
-    waitTime.tv_usec = quantum * 1000;
+    //waitTime.tv_usec = quantum * 1000;
 
-    if (waitTime.tv_usec > MICRO_SECONDS_PER_SECOND) {
-      waitTime.tv_sec = (tv_sec) waitTime.tv_usec / MICRO_SECONDS_PER_SECOND;
-      waitTime.tv_usec = (tv_usec) waitTime.tv_usec % MICRO_SECONDS_PER_SECOND;
-    }
+    // if (waitTime.tv_usec > MICRO_SECONDS_PER_SECOND) {
+    //   waitTime.tv_sec = waitTime.tv_usec / MICRO_SECONDS_PER_SECOND;
+    //   waitTime.tv_usec = waitTime.tv_usec % MICRO_SECONDS_PER_SECOND;
+    // }
 
+    printf("starting pid %d\n", curr->pid);
     currentRunning = curr;
-    setitimer(ITIMER_REAL, timerset);
     kill(curr->pid, SIGCONT);
-    waitpid(curr->pid, NULL, NULL);
+    r_pid = waitpid(curr->pid, &status, WUNTRACED);  //WUNTRACED returns child information on stopped and terminated
+    printf("returned waitpid %d on pid %d\n", r_pid, curr->pid);
+    if (r_pid){
+      if (WIFEXITED(status)) remove = 1;
+    }
     curr = curr->next;
+    if (remove) remove_node(r_pid);
+    remove = 0;
   }
 }
 
-void catch_alarm (int sig) {
-  if (sig == SIGALRM) {
-    kill(currentRunning->pid, SIGSTOP);
-  }
-}
 
-void remove_node(int pid){
+
+void remove_node(pid_t pid){
   node *temp = head;
 
   if(head->next == head) { //only 1 in the list
