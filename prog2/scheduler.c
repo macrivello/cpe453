@@ -1,9 +1,9 @@
 /*
-	Cameron Dunn
-	Michael Crivello
-	CPE453 - Fall 2013
-	Peterson
-	Program 2 - Scheduler
+  Cameron Dunn
+  Michael Crivello
+  CPE453 - Fall 2013
+  Peterson
+  Program 2 - Scheduler
 */
 
 #include <stdlib.h>
@@ -18,32 +18,31 @@
 
 #define MAX_ARGS 10
 #define MAX_PROGS 10
-#define MICRO_SECONDS_PER_SECOND 1000000
 
 //struct to build linked list of processes
 typedef struct proc_list_node{
-	pid_t pid;
-	char* name;   
+  pid_t pid;
+  char* name;   
   char** args;
   struct proc_list_node *prev;
   struct proc_list_node *next;
 } node;
 
 int quantum;
+int currentPid = -1;
 
 node *head;
-node *currentRunning;
 
 void printUsageAndExit();
 void forkFest();
 int scheduler();
-void remove_node(pid_t);
+node* remove_node(pid_t);
 void print_list();
 
-void timer_handler (int signum) 
+void timer_handler(int signum) 
 {
-  printf("stopping pid %d\n",currentRunning->pid);
-  kill(currentRunning->pid, SIGSTOP);
+  //sprintf("stopping pid %d\n", pid);
+  kill(currentPid, SIGSTOP);
 } 
 
 int main(int argc, char *argv[]) {
@@ -68,11 +67,12 @@ int main(int argc, char *argv[]) {
         printUsageAndExit();
       }
 
-      curr->name = *argv++;
-      curr->args = argv;
+      curr->pid = -1;
+      curr->name = *argv;
+      curr->args = argv++;
 
       if (head == NULL) {
-        currentRunning = head = curr->next = curr->prev = curr;
+        head = curr->next = curr->prev = curr;
       } else {
         node *tailNode = head->prev;
         curr->next = head;
@@ -113,80 +113,87 @@ void printUsageAndExit() {
 void forkFest()  {
   node *curr = head;
   pid_t pid;
-  while (curr->pid == 0) {
-    if (pid = fork()) {
+  while (curr->pid == -1) {
+    pid = fork();
+    if (pid > 0) {
       //Parent
       curr->pid = pid;
-    } else {
+    } else if (pid == 0) {
       //Child
-      pause();
-
+      //pause();
+      raise(SIGSTOP);
+      //printf("raise returned %d", raise(SIGSTOP));
+      //pause();
       //Bootstrap child process
       execvp(curr->name, curr->args);
+      printf("There was an error executing your process\n");
+      exit(1);
+    } else {
+      printf("Fork error! %d\n", pid);
     }
 
     curr = curr->next;
   }
-  print_list();
-}
 
+}
+  
 int scheduler() {
-  node *curr = currentRunning;
+  print_list();
+  node *curr = head;
   struct sigaction sa;  
   struct itimerval timerset;
-  int status, remove; //in case we need reference
+  int status; //in case we need reference
   pid_t r_pid;
 
-  memset (&sa, 0, sizeof (sa)); 
+  memset(&sa, 0, sizeof (sa)); 
   sa.sa_handler = &timer_handler; 
-  sigaction (SIGALRM, &sa, NULL); 
+  sigaction(SIGALRM, &sa, NULL); 
 
-  timerset.it_interval.tv_sec = timerset.it_value.tv_sec = 0;;
-  timerset.it_interval.tv_usec = timerset.it_value.tv_usec = quantum * 1000;
-  setitimer(ITIMER_REAL, &timerset, NULL);
+  timerset.it_interval.tv_usec = 0;
+  timerset.it_interval.tv_sec = 0;
 
   while (curr) {
-    //struct itimerval timerset;
-    //struct timeval waitTime;
-
-    //waitTime.tv_usec = quantum * 1000;
-
-    // if (waitTime.tv_usec > MICRO_SECONDS_PER_SECOND) {
-    //   waitTime.tv_sec = waitTime.tv_usec / MICRO_SECONDS_PER_SECOND;
-    //   waitTime.tv_usec = waitTime.tv_usec % MICRO_SECONDS_PER_SECOND;
-    // }
+    timerset.it_value.tv_usec = (quantum % 1000) * 1000;
+    timerset.it_value.tv_sec = quantum / 1000;
+ 
+    setitimer(ITIMER_REAL, &timerset, NULL);
 
     printf("starting pid %d\n", curr->pid);
-    currentRunning = curr;
+    if(curr->pid < 0) exit(1);
+    currentPid = curr->pid;
     kill(curr->pid, SIGCONT);
     r_pid = waitpid(curr->pid, &status, WUNTRACED);  //WUNTRACED returns child information on stopped and terminated
     printf("returned waitpid %d on pid %d\n", r_pid, curr->pid);
-    if (r_pid){
-      if (WIFEXITED(status)) remove = 1;
+    
+    if (r_pid > 0 && (WIFEXITED(status) || WIFSIGNALED(status))) {
+      printf("WIFIEXITED %d\n", WIFEXITED(status));
+      printf("WIFSIGNALED %d\n", WIFSIGNALED(status));
+      printf("SIGNAL val %d\n", WTERMSIG(status));
+      curr = remove_node(r_pid);
+    } else {
+      curr = curr->next;
     }
-    curr = curr->next;
-    if (remove) remove_node(r_pid);
-    remove = 0;
   }
 }
 
-
-
-void remove_node(pid_t pid){
+node* remove_node(pid_t pid){
   node *temp = head;
-
+  node *ret;
+  printf("Removing pid %d", pid);
+  //exit(0);
   if(head->next == head) { //only 1 in the list
     free(head);
-    head = NULL;
+    return head = NULL;
   }else{
     while(temp->pid != pid)
       temp = temp->next;
     if(temp == head){
       head = temp->next;
     }     
-     temp->prev->next = temp->next;
-     temp->next->prev = temp->prev;
-     free(temp);   
+    ret = temp->prev->next = temp->next;
+    temp->next->prev = temp->prev;
+    free(temp);
+    return ret;   
   }
 }
 
@@ -198,6 +205,8 @@ void print_list(){
   if(head){
     do{
       printf("pid: %d\n name: %s\n args: ",curr->pid,curr->name);
+      printf("\ncurr %X next %X\n", curr, curr->next);
+
       for(j = 0; curr->args[j]; j++){
         printf("%s ", curr->args[j]);
       }
